@@ -359,7 +359,7 @@ async def werewolf_vote(bot, ev):
     await bot.send(ev, f'你投票了 {target_nick}！')
 
 @sv.on_fullmatch('平安夜', only_to_me=True)
-async def witch_save(bot, ev):
+async def witch_night(bot, ev):
     """女巫选择平安夜"""
     group_id = ev.group_id  # 获取群号
     user_id = ev.user_id
