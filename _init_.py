@@ -559,13 +559,6 @@ async def end_werewolf(bot, ev):
     else:
         await bot.send(ev, '只有房主或管理员才能结束游戏！')
 
-async def end_game(bot, ev):  # 修复：只接受 bot 和 ev
-    """结束游戏"""
-    group_id = ev.group_id  # 从 ev 中获取 group_id
-    if group_id in game_state:
-        del game_state[group_id]  # 清除游戏状态
-    await bot.send(ev, '游戏结束！')
-
 # 游戏流程函数
 async def night_phase(bot, ev, group_id):
     """夜晚阶段"""
