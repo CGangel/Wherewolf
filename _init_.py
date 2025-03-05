@@ -702,10 +702,11 @@ async def process_day_votes(bot, ev, group_id):
     else:
         await night_phase(bot, ev, group_id)
 
-async def end_game(bot, ev, group_id):
+async def end_game(bot, ev):  # 修复：只接受 bot 和 ev
     """结束游戏"""
+    group_id = ev.group_id  # 从 ev 中获取 group_id
     if group_id in game_state:
-        del game_state[group_id]
+        del game_state[group_id]  # 清除游戏状态
     await bot.send(ev, '游戏结束！')
 
 # 帮助命令
