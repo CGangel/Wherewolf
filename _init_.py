@@ -2,14 +2,16 @@ import os
 import random
 import asyncio
 import hoshino
-from hoshino import Service
+import nonebot
+from hoshino import Service, sucmd
 from hoshino.util import FreqLimiter
 from hoshino.config import SUPERUSERS
 from .. import money, config
-from .._R import get, userPath
+from .._R import get
 from ..utilize import get_double_mean_money
 from ..money import get_user_money, reduce_user_money, increase_user_money
-from hoshino.typing import CQEvent as Event
+from nonebot import on_command, on_request, get_bot
+from hoshino.typing import CQEvent as Event, CommandSession, CQHttpError, NoticeSession
 from nonebot.message import MessageSegment
 
 sv = Service("狼人杀", manage_priv=5, visible=True, enable_on_default=True)
@@ -113,6 +115,22 @@ def get_user_id_from_player_num(group_id, player_num):
         if player_info['player_num'] == player_num:
             return user_id
     return None
+
+@on_command('在吗')
+async def zaima(session: CommandSession):
+    bot = nonebot.get_bot()
+    user = session.ev.user_id
+    await bot.send_private_msg(user_id=user, message='嗨！')  #为测试指令，目的于检查玩家是否可以私聊机器人（如果无法私聊请让他加好友）
+
+@sv.on_command('在不在')
+async def zaibuzai(session: CommandSession):
+    bot = nonebot.get_bot()
+    user = session.event.user_id
+    gid = session.event.group_id
+
+    await bot.send_group_msg(group_id=gid, message=f'嗨！') #at_sender没有用！！#为另一个测试指令，检查机器人是否可以在群里发送信息
+
+
 
 # 命令处理器
 @sv.on_fullmatch('开始狼人杀')
@@ -261,7 +279,10 @@ async def start_game(bot, ev):
             await bot.send(ev, f'无法私聊玩家 {user_id}，请确保已添加机器人好友。')
             hoshino.logger.error(f"私聊发送失败: {e}")
     await night_phase(bot, ev, group_id)  # 进入第一个夜晚
+    
+    
 
+            
 @sv.on_prefix('投票')  # 白天投票，群聊指令
 async def vote(bot, ev):
     """白天投票放逐玩家"""
@@ -314,11 +335,17 @@ async def vote(bot, ev):
     if all_voted:
         await process_day_votes(bot, ev, group_id)
 
-@sv.on_prefix('狼人投票', only_to_me=True)  # 狼人狼人投票，私聊指令
-async def werewolf_vote(bot, ev):
+@on_command('狼人投票', only_to_me=True)  # 狼人狼人投票，私聊指令
+async def werewolf_vote(session: CommandSession):
     """狼人夜晚投票杀人"""
-    group_id = ev.group_id
+    bot = session.bot
+    ev = session.event
+    group_id = ev.group_id if ev.message_type == 'group' else session.ctx['group_id'] if 'group_id' in session.ctx else None #优先使用event中的group_id，如果没有（私聊），使用ctx中存储的group_id，如果ctx中也没有，则设为None
     user_id = ev.user_id
+
+    if not group_id: #如果没有group_id，说明既不是群聊，ctx中也没有存，说明是第一次私聊，报错
+        await bot.send(ev, '请先在群里开始游戏，再私聊我进行操作！')
+        return
 
     if not is_game_running(group_id):
         await bot.send(ev, '游戏尚未开始！')
@@ -332,12 +359,10 @@ async def werewolf_vote(bot, ev):
     if user_id not in game_state[group_id]['players'] or not game_state[group_id]['players'][user_id]['alive']:
         await bot.send(ev, '你已经死亡，无法投票！')
         return
-
     message = ev.message.extract_plain_text().strip()
     if not message.isdigit():
         await bot.send(ev, '请指定要投票的玩家序号 (例如: 狼人投票 1)')
         return
-
     target_player_num = int(message)
     target_id = get_user_id_from_player_num(group_id, target_player_num)
     if not target_id:
@@ -349,45 +374,24 @@ async def werewolf_vote(bot, ev):
     if target_id == user_id:
         await bot.send(ev, '不能投票给自己！')
         return
-
     if 'wolf_votes' not in game_state[group_id]:
         game_state[group_id]['wolf_votes'] = {}
-
     game_state[group_id]['wolf_votes'][user_id] = target_id
     target_nick = get_player_nick(group_id, target_id)
     await bot.send(ev, f'你投票了 {target_nick}！')
 
-@sv.on_fullmatch('平安夜', only_to_me=True)
-async def witch_night(bot, ev):
+@on_command('平安夜', only_to_me=True)
+async def witch_night(session: CommandSession):
     """女巫选择平安夜"""
-    group_id = ev.group_id  # 获取群号
+    bot = session.bot
+    ev = session.event
+    group_id = ev.group_id if ev.message_type == 'group' else session.ctx['group_id'] if 'group_id' in session.ctx else None
     user_id = ev.user_id
-    if not is_game_running(group_id):  # 检查游戏是否正在运行
-        await bot.send(ev, '游戏尚未开始！')
-        return
-    if not game_state[group_id]['night']:  # 检查是否在夜晚
-        await bot.send(ev, '请在夜晚使用此命令！')
-        return
-    if get_player_role(group_id, user_id) != '女巫':  # 检查是否是女巫
-        await bot.send(ev, '只有女巫才能使用此命令！')
-        return
-    if game_state[group_id]['witch_used_potion']:  # 检查是否已经使用过解药
-        await bot.send(ev, '你已经使用过解药了！')
-        return
-    game_state[group_id]['witch_used_potion'] = True
-    if game_state[group_id]['last_night_dead'] is None:
-        await bot.send(ev, '昨晚没有人死亡，你无法使用解药！')
-        await bot.send_group_msg(group_id=GAME_ROOM_GROUP, message='昨晚没有人死亡，女巫选择了不使用解药')
-        return
-    game_state[group_id]['last_night_dead'] = None
-    await bot.send(ev, '你选择了平安夜，昨晚死亡的玩家被你救活了！')
-    await bot.send_group_msg(group_id=GAME_ROOM_GROUP, message='女巫选择了平安夜，昨晚死亡的玩家被救活了')
 
-@sv.on_prefix('解药', only_to_me=True)
-async def witch_save(bot, ev):
-    """女巫使用解药"""
-    group_id = ev.group_id
-    user_id = ev.user_id
+    if not group_id:
+        await bot.send(ev, '请先在群里开始游戏，再私聊我进行操作！')
+        return
+
     if not is_game_running(group_id):
         await bot.send(ev, '游戏尚未开始！')
         return
@@ -400,12 +404,43 @@ async def witch_save(bot, ev):
     if game_state[group_id]['witch_used_potion']:
         await bot.send(ev, '你已经使用过解药了！')
         return
+    game_state[group_id]['witch_used_potion'] = True
+    if game_state[group_id]['last_night_dead'] is None:
+        await bot.send(ev, '昨晚没有人死亡，你无法使用解药！')
+        await bot.send_group_msg(group_id=group_id, message='昨晚没有人死亡，女巫选择了不使用解药') # 发送回游戏群
+        return
+    game_state[group_id]['last_night_dead'] = None
+    await bot.send(ev, '你选择了平安夜，昨晚死亡的玩家被你救活了！')
+    await bot.send_group_msg(group_id=group_id, message='女巫选择了平安夜，昨晚死亡的玩家被救活了') # 发送回游戏群
 
+@on_command('解药', only_to_me=True)
+async def witch_save(session: CommandSession):
+    """女巫使用解药"""
+    bot = session.bot
+    ev = session.event
+    group_id = ev.group_id if ev.message_type == 'group' else session.ctx['group_id'] if 'group_id' in session.ctx else None
+    user_id = ev.user_id
+
+    if not group_id:
+        await bot.send(ev, '请先在群里开始游戏，再私聊我进行操作！')
+        return
+
+    if not is_game_running(group_id):
+        await bot.send(ev, '游戏尚未开始！')
+        return
+    if not game_state[group_id]['night']:
+        await bot.send(ev, '请在夜晚使用此命令！')
+        return
+    if get_player_role(group_id, user_id) != '女巫':
+        await bot.send(ev, '只有女巫才能使用此命令！')
+        return
+    if game_state[group_id]['witch_used_potion']:
+        await bot.send(ev, '你已经使用过解药了！')
+        return
     message = ev.message.extract_plain_text().strip()
     if not message.isdigit():
         await bot.send(ev, '请输入要救的玩家序号')
         return
-
     target_player_num = int(message)
     target_id = get_user_id_from_player_num(group_id, target_player_num)
     if not target_id:
@@ -417,19 +452,25 @@ async def witch_save(bot, ev):
     if game_state[group_id]['last_night_dead'] != target_id:
         await bot.send(ev, '昨晚死亡的不是这个人！')
         return
-
     game_state[group_id]['witch_used_potion'] = True
     game_state[group_id]['players'][target_id]['alive'] = True
     game_state[group_id]['last_night_dead'] = None
     target_nick = get_player_nick(group_id, target_id)
     await bot.send(ev, f'你使用了灵药，救活了 {target_nick}！')
-    await bot.send_group_msg(group_id=GAME_ROOM_GROUP, message=f'女巫使用了灵药，救活了 {target_nick}！')
+    await bot.send_group_msg(group_id=group_id, message=f'女巫使用了灵药，救活了 {target_nick}！') # 发送回游戏群
 
-@sv.on_prefix('毒药', only_to_me=True)
-async def witch_poison(bot, ev):
+@on_command('毒药', only_to_me=True)
+async def witch_poison(session: CommandSession):
     """女巫使用毒药"""
-    group_id = ev.group_id
+    bot = session.bot
+    ev = session.event
+    group_id = ev.group_id if ev.message_type == 'group' else session.ctx['group_id'] if 'group_id' in session.ctx else None
     user_id = ev.user_id
+
+    if not group_id:
+        await bot.send(ev, '请先在群里开始游戏，再私聊我进行操作！')
+        return
+
     if not is_game_running(group_id):
         await bot.send(ev, '游戏尚未开始！')
         return
@@ -442,12 +483,10 @@ async def witch_poison(bot, ev):
     if game_state[group_id]['witch_used_poison']:
         await bot.send(ev, '你已经使用过毒药了！')
         return
-
     message = ev.message.extract_plain_text().strip()
     if not message.isdigit():
         await bot.send(ev, '请输入要毒的玩家序号')
         return
-
     target_player_num = int(message)
     target_id = get_user_id_from_player_num(group_id, target_player_num)
     if not target_id:
@@ -456,18 +495,24 @@ async def witch_poison(bot, ev):
     if not game_state[group_id]['players'][target_id]['alive']:
         await bot.send(ev, '该玩家已经死亡，不能使用毒药！')
         return
-
     game_state[group_id]['witch_used_poison'] = True
     game_state[group_id]['players'][target_id]['alive'] = False
     target_nick = get_player_nick(group_id, target_id)
     await bot.send(ev, f'你使用了毒药，毒死了 {target_nick}！')
-    await bot.send_group_msg(group_id=GAME_ROOM_GROUP, message=f'女巫使用了毒药，毒死了 {target_nick}！')
+    await bot.send_group_msg(group_id=group_id, message=f'女巫使用了毒药，毒死了 {target_nick}！') # 发送回游戏群
 
-@sv.on_prefix('查验', only_to_me=True)
-async def seer_check(bot, ev):
+@on_command('查验', only_to_me=True)
+async def seer_check(session: CommandSession):
     """预言家查验"""
-    group_id = ev.group_id
+    bot = session.bot
+    ev = session.event
+    group_id = ev.group_id if ev.message_type == 'group' else session.ctx['group_id'] if 'group_id' in session.ctx else None
     user_id = ev.user_id
+
+    if not group_id:
+        await bot.send(ev, '请先在群里开始游戏，再私聊我进行操作！')
+        return
+
     if not is_game_running(group_id):
         await bot.send(ev, '游戏尚未开始！')
         return
@@ -477,12 +522,10 @@ async def seer_check(bot, ev):
     if get_player_role(group_id, user_id) != '预言家':
         await bot.send(ev, '只有预言家才能使用此命令！')
         return
-
     message = ev.message.extract_plain_text().strip()
     if not message.isdigit():
         await bot.send(ev, '请输入要查验的玩家序号')
         return
-
     target_player_num = int(message)
     target_id = get_user_id_from_player_num(group_id, target_player_num)
     if not target_id:
@@ -491,13 +534,12 @@ async def seer_check(bot, ev):
     if not game_state[group_id]['players'][target_id]['alive']:
         await bot.send(ev, '该玩家已经死亡，无法查验！')
         return
-
     target_role = get_player_role(group_id, target_id)
     is_werewolf = target_role == '狼人'
     result = '是狼人' if is_werewolf else '不是狼人'
     target_nick = get_player_nick(group_id, target_id)
     await bot.send(ev, f'{target_nick} {result}！')
-    await bot.send_group_msg(group_id=GAME_ROOM_GROUP, message='预言家进行了查验')
+    await bot.send_group_msg(group_id=group_id, message='预言家进行了查验') # 发送回游戏群
 
 @sv.on_fullmatch('结束狼人杀')
 async def end_werewolf(bot, ev):
