@@ -14,10 +14,10 @@ from nonebot import on_command, on_request, get_bot
 from hoshino.typing import CQEvent as Event, CommandSession, CQHttpError, NoticeSession
 from nonebot.message import MessageSegment
 
-sv = Service("狼人杀", manage_priv=5, visible=True, enable_on_default=True)
+sv = Service("狼人杀", enable_on_default=True)
 
 # 插件信息
-__plugin_name__ = '狼人杀'
+__plugin_name__ = '狼人杀（适用于冰祈）'
 __plugin_usage__ = (
     '使用方法：\n'
     '开始狼人杀 - 创建一个狼人杀房间\n'
